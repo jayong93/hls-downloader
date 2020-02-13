@@ -4,7 +4,7 @@ use futures::channel::{mpsc, oneshot};
 use futures::prelude::*;
 use indicatif::*;
 use lazy_static::*;
-use m3u8_rs;
+use m3u8_rs::{playlist::*, *};
 use std::cell::UnsafeCell;
 
 lazy_static! {
@@ -25,18 +25,42 @@ async fn main() {
     download_video(hls_list, &args).await.await.unwrap();
 }
 
-async fn get_hls_data(
-    urls: Vec<String>,
-) -> Vec<Option<(String, m3u8_rs::playlist::MediaPlaylist)>> {
+async fn master_to_media(
+    org_url: &str,
+    master_list: m3u8_rs::playlist::MasterPlaylist,
+) -> m3u8_rs::playlist::MediaPlaylist {
+    let base_url = org_url.trim_end_matches(|c| c != '/').to_owned();
+    let media_url = &master_list.variants.first().unwrap().uri;
+    REQ_CLIENT
+        .get(&(base_url + media_url))
+        .send()
+        .map_err(|e| eprintln!("Error: {}", e))
+        .and_then(|res| res.bytes().map_err(|e| eprintln!("Error: {}", e)))
+        .map_ok(|b| parse_media_playlist(b.as_ref()).unwrap().1)
+        .map(|res| res.unwrap())
+        .await
+}
+
+async fn get_hls_data(urls: Vec<String>) -> Vec<Option<(String, MediaPlaylist)>> {
     stream::iter(urls)
-        .map(|url| {
-            REQ_CLIENT
+        .map(|url| async {
+            let bytes = REQ_CLIENT
                 .get(&url)
                 .send()
                 .map_err(|e| eprintln!("Error: {}", e))
                 .and_then(|res| res.bytes().map_err(|e| eprintln!("Error: {}", e)))
-                .map_ok(|b| m3u8_rs::parse_media_playlist(b.as_ref()).unwrap().1)
-                .map(|res| res.ok().map(|pl| (url, pl)))
+                .await;
+            if let Some(bytes) = bytes.ok() {
+                match parse_playlist_res(bytes.as_ref()).unwrap() {
+                    Playlist::MasterPlaylist(master_list) => {
+                        let media_list = master_to_media(&url, master_list).await;
+                        Some((url, media_list))
+                    }
+                    Playlist::MediaPlaylist(media_list) => Some((url, media_list)),
+                }
+            } else {
+                None
+            }
         })
         .buffer_unordered(MAX_FUTURE_NUM)
         .collect::<Vec<_>>()
