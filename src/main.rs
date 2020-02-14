@@ -90,13 +90,16 @@ fn get_args<'a>(app: clap::App<'a, '_>) -> clap::ArgMatches<'a> {
                 .multiple(true)
                 .required(true)
                 .index(1)
-                .takes_value(true),
+                .takes_value(true)
+                .number_of_values(1)
         )
         .arg(
             clap::Arg::with_name("out_name")
                 .multiple(true)
                 .required(true)
                 .short("o")
+                .takes_value(true)
+                .number_of_values(1)
                 .value_name("OUT_NAME")
         )
         .arg(
@@ -118,6 +121,7 @@ Each time has same format: [[HOUR:]MIN:]SEC"
                 .long("duration")
                 .value_name("DURATION")
                 .multiple(true)
+                .takes_value(true)
                 .number_of_values(1)
                 .validator(|s| if TIME_PATTERN.is_match(&s) {Ok(())} else {Err("Wrong duration format. please read help message with '--help'".to_owned())})
         )
