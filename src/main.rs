@@ -89,6 +89,7 @@ fn get_args<'a>(app: clap::App<'a, '_>) -> clap::ArgMatches<'a> {
                 .help("HLS URLs to be downloaded. If neither an input file nor an url is provided, it reads urls from stdin.")
                 .multiple(true)
                 .required(true)
+                .empty_values(false)
                 .index(1)
                 .takes_value(true)
                 .number_of_values(1)
@@ -98,6 +99,7 @@ fn get_args<'a>(app: clap::App<'a, '_>) -> clap::ArgMatches<'a> {
                 .multiple(true)
                 .required(true)
                 .short("o")
+                .empty_values(false)
                 .takes_value(true)
                 .number_of_values(1)
                 .value_name("OUT_NAME")
@@ -106,6 +108,7 @@ fn get_args<'a>(app: clap::App<'a, '_>) -> clap::ArgMatches<'a> {
             clap::Arg::with_name("out_dir")
                 .help("Where temporary videos and full videos will be saved in.")
                 .long("out-dir")
+                .empty_values(false)
                 .value_name("OUT_DIR")
                 .default_value("."),
         )
