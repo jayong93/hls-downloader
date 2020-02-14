@@ -313,11 +313,16 @@ dependencies = [
 
 [[package]]
 name = "glib"
-version = "0.8.2"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be27232841baa43e0fd5ae003f7941925735b2f733a336dc75f07b9eff415e7b"
+checksum = "40fb573a09841b6386ddf15fd4bc6655b4f5b106ca962f57ecaecde32a0061c0"
 dependencies = [
  "bitflags",
+ "futures-channel",
+ "futures-core",
+ "futures-executor",
+ "futures-task",
+ "futures-util",
  "glib-sys",
  "gobject-sys",
  "lazy_static",
@@ -347,12 +352,15 @@ dependencies = [
 
 [[package]]
 name = "gstreamer"
-version = "0.14.5"
+version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa91e470b0cd4b05611f7d0e89caf76e39752156440877f04c23ad34ffc9761c"
+checksum = "f439859b5f3310518adc0aea572ac89ddd94f8ba3af4626d6156733671599629"
 dependencies = [
  "bitflags",
  "cfg-if",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
  "glib",
  "glib-sys",
  "gobject-sys",
@@ -361,13 +369,14 @@ dependencies = [
  "libc",
  "muldiv",
  "num-rational",
+ "paste",
 ]
 
 [[package]]
 name = "gstreamer-app"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a85485c2db4149ccb24d0b3c6598725743dec254bf757ac7a3684e62b9822c27"
+checksum = "fe16616846b453c5d976cee9e3617ec4b098bd160d95883a455c43b4e31a3b56"
 dependencies = [
  "bitflags",
  "glib",
@@ -376,7 +385,6 @@ dependencies = [
  "gstreamer",
  "gstreamer-app-sys",
  "gstreamer-base",
- "gstreamer-base-sys",
  "gstreamer-sys",
  "libc",
 ]
@@ -396,9 +404,9 @@ dependencies = [
 
 [[package]]
 name = "gstreamer-base"
-version = "0.14.4"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37ed3ddb8f1a65e401340afb5657d2107d78c82f06a081e19393fc8d4c5ee720"
+checksum = "1eaec2ff20b049560762f83545d95b33fd1533512792f37a9a3f6800e45da42b"
 dependencies = [
  "bitflags",
  "glib",
@@ -853,6 +861,28 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "paste"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "423a519e1c6e828f1e73b720f9d9ed2fa643dce8a7737fb43235ce0b41eeaa49"
+dependencies = [
+ "paste-impl",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "paste-impl"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4214c9e912ef61bf42b81ba9a47e8aad1b2ffaf739ab162bf96d1e011f54e6c5"
+dependencies = [
+ "proc-macro-hack",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

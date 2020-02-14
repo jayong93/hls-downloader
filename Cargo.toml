@@ -3,6 +3,7 @@ name = "hls_downloader"
 version = "0.1.0"
 authors = ["Choi Jae Yong <jayong93@gmail.com>"]
 edition = "2018"
+build = "build.rs"
 
 [dependencies]
 reqwest = {version="0.10.1", features=["json"]}
@@ -19,8 +20,8 @@ num_cpus = "*"
 indicatif = ">= 0.11.0"
 itertools = "*"
 anyhow = "1.0.19"
-gstreamer = "0.14.5"
-gstreamer-app = "0.14.0"
+gstreamer = "0.15.2"
+gstreamer-app = "0.15.0"
 bytes = "0.5.4"
 m3u8-rs = "*"
 url = "*"
