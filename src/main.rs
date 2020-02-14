@@ -6,6 +6,7 @@ use indicatif::*;
 use lazy_static::*;
 use m3u8_rs::{playlist::*, *};
 use std::cell::UnsafeCell;
+use url::*;
 
 lazy_static! {
     pub static ref REQ_CLIENT: reqwest::Client = reqwest::Client::new();
@@ -26,26 +27,38 @@ async fn main() {
 }
 
 async fn master_to_media(
-    org_url: &str,
+    org_url: &Url,
     master_list: m3u8_rs::playlist::MasterPlaylist,
-) -> m3u8_rs::playlist::MediaPlaylist {
-    let base_url = org_url.trim_end_matches(|c| c != '/').to_owned();
-    let media_url = &master_list.variants.first().unwrap().uri;
-    REQ_CLIENT
-        .get(&(base_url + media_url))
-        .send()
-        .map_err(|e| eprintln!("Error: {}", e))
-        .and_then(|res| res.bytes().map_err(|e| eprintln!("Error: {}", e)))
-        .map_ok(|b| parse_media_playlist(b.as_ref()).unwrap().1)
-        .map(|res| res.unwrap())
-        .await
+) -> (Url, m3u8_rs::playlist::MediaPlaylist) {
+    let target_url = &master_list.variants.first().unwrap().uri;
+    let media_url = Url::parse(target_url)
+        .and_then(|u| {
+            if !u.cannot_be_a_base() {
+                Ok(u)
+            } else {
+                org_url.join(target_url)
+            }
+        })
+        .or(org_url.join(target_url))
+        .unwrap();
+    (
+        media_url.clone(),
+        REQ_CLIENT
+            .get(media_url)
+            .send()
+            .map_err(|e| eprintln!("Error: {}", e))
+            .and_then(|res| res.bytes().map_err(|e| eprintln!("Error: {}", e)))
+            .map_ok(|b| parse_media_playlist(b.as_ref()).unwrap().1)
+            .map(|res| res.unwrap())
+            .await,
+    )
 }
 
-async fn get_hls_data(urls: Vec<String>) -> Vec<Option<(String, MediaPlaylist)>> {
+async fn get_hls_data(urls: Vec<Url>) -> Vec<Option<(Url, MediaPlaylist)>> {
     stream::iter(urls)
         .map(|url| async {
             let bytes = REQ_CLIENT
-                .get(&url)
+                .get(url.clone())
                 .send()
                 .map_err(|e| eprintln!("Error: {}", e))
                 .and_then(|res| res.bytes().map_err(|e| eprintln!("Error: {}", e)))
@@ -53,8 +66,8 @@ async fn get_hls_data(urls: Vec<String>) -> Vec<Option<(String, MediaPlaylist)>>
             if let Some(bytes) = bytes.ok() {
                 match parse_playlist_res(bytes.as_ref()).unwrap() {
                     Playlist::MasterPlaylist(master_list) => {
-                        let media_list = master_to_media(&url, master_list).await;
-                        Some((url, media_list))
+                        let (new_url, media_list) = master_to_media(&url, master_list).await;
+                        Some((new_url, media_list))
                     }
                     Playlist::MediaPlaylist(media_list) => Some((url, media_list)),
                 }
@@ -111,14 +124,14 @@ Each time has same format: [[HOUR:]MIN:]SEC"
         .get_matches()
 }
 
-fn get_urls(args: &clap::ArgMatches<'_>) -> Vec<String> {
+fn get_urls(args: &clap::ArgMatches<'_>) -> Vec<Url> {
     args.values_of("URL")
-        .map(|url_it| url_it.map(|s| s.to_string()).collect())
+        .map(|url_it| url_it.map(|s| Url::parse(s).unwrap()).collect())
         .unwrap()
 }
 
 async fn download_video(
-    video_list: Vec<Option<(String, m3u8_rs::playlist::MediaPlaylist)>>,
+    video_list: Vec<Option<(Url, m3u8_rs::playlist::MediaPlaylist)>>,
     args: &clap::ArgMatches<'_>,
 ) -> oneshot::Receiver<()> {
     let out_dir = std::path::Path::new(args.value_of("out_dir").unwrap()).to_path_buf();
@@ -160,8 +173,7 @@ async fn download_video(
         let (start_time, end_time) = times.get(idx).copied().unwrap_or((0f32, 0f32));
 
         match (video, out_names.get(idx)) {
-            (Some((mut url, playlist)), Some(name)) => {
-                url.split_off(url.rfind('/').unwrap() + 1);
+            (Some((url, playlist)), Some(name)) => {
                 let cumul_time = UnsafeCell::new(0f32);
                 let content_length_list: Vec<_> = stream::iter(playlist.segments)
                     .skip_while(|chunk| {
@@ -191,7 +203,7 @@ async fn download_video(
                     })
                     .map(|chunk| {
                         REQ_CLIENT
-                            .head(&(url.clone() + &chunk.uri))
+                            .head(url.join(&chunk.uri).unwrap())
                             .send()
                             .map_ok(|res| res.content_length().unwrap_or(0))
                             .map(|res| (res.unwrap_or(0), chunk))
@@ -220,7 +232,7 @@ async fn download_video(
                         let pb = pb.clone();
                         stream::iter(content_length_list)
                             .map(|(_, chunk)| chunk)
-                            .then(|chunk| REQ_CLIENT.get(&(url.clone() + &chunk.uri)).send())
+                            .then(|chunk| REQ_CLIENT.get(url.join(&chunk.uri).unwrap()).send())
                             .map_err(|e| eprintln!("{}", anyhow!(e)))
                             .map_ok(|res| {
                                 stream::unfold(Some(res), |res| async {
