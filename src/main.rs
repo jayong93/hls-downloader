@@ -111,7 +111,7 @@ fn get_args<'a>(app: clap::App<'a, '_>) -> clap::ArgMatches<'a> {
                 .help("Cut replay with specified duration")
                 .long_help(
 "Cut replay with specified duration.
-The format is: [START_TIME-]END_TIME
+The format is: [START_TIME-][END_TIME]
 Each time has same format: [[HOUR:]MIN:]SEC"
                 )
                 .short("d")
