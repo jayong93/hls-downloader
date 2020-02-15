@@ -15,7 +15,7 @@ lazy_static! {
     )
     .unwrap();
 }
-const MAX_FUTURE_NUM: usize = 500;
+const MAX_FUTURE_NUM: usize = 5;
 
 #[tokio::main]
 async fn main() {
@@ -174,8 +174,6 @@ async fn download_video(
         vec![]
     };
 
-    let max_future_per_video = MAX_FUTURE_NUM / video_list.len();
-
     for (idx, video) in video_list.into_iter().enumerate() {
         let (start_time, end_time) = times.get(idx).copied().unwrap_or((0f32, 0f32));
 
@@ -215,7 +213,7 @@ async fn download_video(
                             .map_ok(|res| res.content_length().unwrap_or(0))
                             .map(|res| (res.unwrap_or(0), chunk))
                     })
-                    .buffered(20)
+                    .buffered(MAX_FUTURE_NUM)
                     .collect()
                     .await;
 
@@ -268,7 +266,7 @@ async fn download_video(
                                     .ok();
                                 future::ready(())
                             })
-                            .buffered(max_future_per_video)
+                            .buffered(MAX_FUTURE_NUM)
                             .for_each(|_| future::ready(()))
                             .await;
                     }
