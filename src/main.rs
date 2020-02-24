@@ -15,7 +15,7 @@ lazy_static! {
     )
     .unwrap();
 }
-const MAX_FUTURE_NUM: usize = 5;
+const MAX_FUTURE_NUM: usize = 10;
 
 #[tokio::main]
 async fn main() {
@@ -180,50 +180,58 @@ async fn download_video(
         match (video, out_names.get(idx)) {
             (Some((url, playlist)), Some(name)) => {
                 let cumul_time = UnsafeCell::new(0f32);
-                let content_length_list: Vec<_> = stream::iter(playlist.segments)
+                let mut total_bytes: Option<i32> = None;
+                let content_length_list: Vec<_> = playlist
+                    .segments
+                    .into_iter()
                     .skip_while(|chunk| {
                         if start_time == 0.0 {
-                            return future::ready(false);
+                            return false;
                         }
                         let cumul_time = unsafe { &mut *cumul_time.get() };
                         let chunk_end_time = *cumul_time + chunk.duration;
                         if chunk_end_time < start_time {
                             *cumul_time = chunk_end_time;
-                            future::ready(true)
+                            true
                         } else {
-                            future::ready(false)
+                            false
                         }
                     })
                     .take_while(|chunk| {
                         if end_time == 0.0 {
-                            return future::ready(true);
+                            return true;
                         }
                         let chunk_start_time = unsafe { &mut *cumul_time.get() };
                         if *chunk_start_time <= end_time {
                             *chunk_start_time += chunk.duration;
-                            future::ready(true)
+                            true
                         } else {
-                            future::ready(false)
+                            false
                         }
                     })
-                    .map(|chunk| {
-                        REQ_CLIENT
-                            .head(url.join(&chunk.uri).unwrap())
-                            .send()
-                            .map_ok(|res| res.content_length().unwrap_or(0))
-                            .map(|res| (res.unwrap_or(0), chunk))
+                    .inspect(|chunk| match (total_bytes, chunk.byte_range.as_ref()) {
+                        (Some(total), Some(byte)) => {
+                            total_bytes = Some(total + byte.length);
+                        }
+                        (None, Some(byte)) => {
+                            total_bytes = Some(byte.length);
+                        }
+                        _ => {
+                            total_bytes = None;
+                        }
                     })
-                    .buffered(MAX_FUTURE_NUM)
-                    .collect()
-                    .await;
+                    .collect();
 
                 let pb = ProgressBar::hidden();
-                pb.set_style(
-                    ProgressStyle::default_bar()
-                        .template("{prefix:12}. [{elapsed_precise}] {wide_bar} {bytes}/{total_bytes} {bytes_per_sec}"),
-                );
+                if let Some(total) = total_bytes {
+                    pb.set_length(total as u64);
+                } else {
+                    pb.set_length(0);
+                }
+                pb.set_style(ProgressStyle::default_bar().template(
+                    "{prefix:12}. [{elapsed_precise}] {bytes}/{total_bytes} {bytes_per_sec}",
+                ));
                 pb.enable_steady_tick(1000);
-                pb.set_length(content_length_list.iter().map(|(len, _)| len).sum());
                 let pb = multi_pb.add(pb);
 
                 pb.set_prefix(&name);
@@ -235,11 +243,12 @@ async fn download_video(
                     let sender = data_send(out_path).await;
                     {
                         let pb = pb.clone();
+                        let pb2 = pb.clone();
                         stream::iter(content_length_list)
-                            .map(|(_, chunk)| chunk)
                             .then(|chunk| REQ_CLIENT.get(url.join(&chunk.uri).unwrap()).send())
                             .map_err(|e| eprintln!("{}", anyhow!(e)))
                             .map_ok(|res| {
+                                pb2.inc_length(res.content_length().unwrap_or(0));
                                 stream::unfold(Some(res), |res| async {
                                     if let Some(mut res) = res {
                                         match res.chunk().await {
@@ -270,6 +279,7 @@ async fn download_video(
                             .for_each(|_| future::ready(()))
                             .await;
                     }
+                    pb.set_length(pb.position());
                     pb.finish();
                 });
             }
