@@ -15,7 +15,7 @@ lazy_static! {
     )
     .unwrap();
 }
-const MAX_FUTURE_NUM: usize = 100;
+const MAX_FUTURE_NUM: usize = 10;
 
 #[tokio::main]
 async fn main() {
