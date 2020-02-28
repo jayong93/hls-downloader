@@ -17,11 +17,18 @@ lazy_static! {
 }
 const MAX_FUTURE_NUM: usize = 10;
 
+#[derive(Clone, Debug)]
+struct HLSVideo {
+    url: Url,
+    name: String,
+    range: (f32, f32),
+}
+
 #[tokio::main]
 async fn main() {
     let args = get_args(clap::App::new("Twitch Downloader"));
-    let urls = get_urls(&args);
-    let hls_list = get_hls_data(urls).await;
+    let urls = get_hls_videos(&args);
+    let hls_list = get_hls_playlist(urls).await;
     gstreamer::init().unwrap();
     download_video(hls_list, &args).await.await.unwrap();
 }
@@ -54,11 +61,11 @@ async fn master_to_media(
     )
 }
 
-async fn get_hls_data(urls: Vec<Url>) -> Vec<Option<(Url, MediaPlaylist)>> {
-    stream::iter(urls)
-        .map(|url| async {
+async fn get_hls_playlist(videos: Vec<HLSVideo>) -> Vec<Option<(HLSVideo, MediaPlaylist)>> {
+    stream::iter(videos)
+        .map(|mut hls_video| async {
             let bytes = REQ_CLIENT
-                .get(url.clone())
+                .get(hls_video.url.clone())
                 .send()
                 .map_err(|e| eprintln!("Error: {}", e))
                 .and_then(|res| res.bytes().map_err(|e| eprintln!("Error: {}", e)))
@@ -66,10 +73,12 @@ async fn get_hls_data(urls: Vec<Url>) -> Vec<Option<(Url, MediaPlaylist)>> {
             if let Some(bytes) = bytes.ok() {
                 match parse_playlist_res(bytes.as_ref()).unwrap() {
                     Playlist::MasterPlaylist(master_list) => {
-                        let (new_url, media_list) = master_to_media(&url, master_list).await;
-                        Some((new_url, media_list))
+                        let (new_url, media_list) =
+                            master_to_media(&hls_video.url, master_list).await;
+                        hls_video.url = new_url;
+                        Some((hls_video, media_list))
                     }
-                    Playlist::MediaPlaylist(media_list) => Some((url, media_list)),
+                    Playlist::MediaPlaylist(media_list) => Some((hls_video, media_list)),
                 }
             } else {
                 None
@@ -85,24 +94,15 @@ fn get_args<'a>(app: clap::App<'a, '_>) -> clap::ArgMatches<'a> {
         .author("SyuJyo <jayong93@gmail.com>")
         .about("Download any hls playlist")
         .arg(
-            clap::Arg::with_name("URL")
-                .help("HLS URLs to be downloaded. If neither an input file nor an url is provided, it reads urls from stdin.")
+            clap::Arg::with_name("VIDEO_DATA")
+                .help("HLS Video data to be downloaded. You should provide a video url and the name. And you can give a optional play range. The url, name and play range should be delimited by semicolon. The format of play range is: [START_TIME-][END_TIME]. Each time has same format: [[HOUR:]MIN:]SEC.")
                 .multiple(true)
                 .required(true)
                 .empty_values(false)
                 .index(1)
                 .takes_value(true)
                 .number_of_values(1)
-        )
-        .arg(
-            clap::Arg::with_name("out_name")
-                .multiple(true)
-                .required(true)
-                .short("o")
-                .empty_values(false)
-                .takes_value(true)
-                .number_of_values(1)
-                .value_name("OUT_NAME")
+                .validator(|s| str_to_hls_video(&s).map(|_| ()))
         )
         .arg(
             clap::Arg::with_name("out_dir")
@@ -112,73 +112,67 @@ fn get_args<'a>(app: clap::App<'a, '_>) -> clap::ArgMatches<'a> {
                 .value_name("OUT_DIR")
                 .default_value("."),
         )
-        .arg(
-            clap::Arg::with_name("duration")
-                .help("Cut replay with specified duration")
-                .long_help(
-"Cut replay with specified duration.
-The format is: [START_TIME-][END_TIME]
-Each time has same format: [[HOUR:]MIN:]SEC"
-                )
-                .short("d")
-                .long("duration")
-                .value_name("DURATION")
-                .multiple(true)
-                .takes_value(true)
-                .number_of_values(1)
-                .validator(|s| if TIME_PATTERN.is_match(&s) {Ok(())} else {Err("Wrong duration format. please read help message with '--help'".to_owned())})
-        )
         .get_matches()
 }
 
-fn get_urls(args: &clap::ArgMatches<'_>) -> Vec<Url> {
-    args.values_of("URL")
-        .map(|url_it| url_it.map(|s| Url::parse(s).unwrap()).collect())
+fn str_to_hls_video(s: &str) -> Result<HLSVideo, String> {
+    let mut it = s.split(';');
+    let url = it
+        .next()
+        .ok_or("You should provide url of a video".to_owned())
+        .and_then(|u| Url::parse(u.trim()).map_err(|e| format!("{}", e)))?;
+    let name = it
+        .next()
+        .and_then(|n| {
+            let n = n.trim();
+            if n.len() == 0 {
+                None
+            } else {
+                Some(n)
+            }
+        })
+        .ok_or("You should provide name of a video".to_owned())?
+        .to_string();
+    let range = if let Some(time_data) = it.next() {
+        let caps = TIME_PATTERN
+            .captures(time_data.trim())
+            .ok_or("Wrong play range format. The format is: [START_TIME-][END_TIME]. Each time has same format: [[HOUR:]MIN:]SEC")?;
+        let times: Vec<usize> = caps
+            .iter()
+            .skip(1)
+            .map(|m| m.and_then(|mat| mat.as_str().parse().ok()).unwrap_or(0))
+            .collect();
+        (
+            (times[0] * 3600 + times[1] * 60 + times[2]) as f32,
+            (times[3] * 3600 + times[4] * 60 + times[5]) as f32,
+        )
+    } else {
+        (0f32, 0f32)
+    };
+
+    Ok(HLSVideo { url, name, range })
+}
+
+fn get_hls_videos(args: &clap::ArgMatches<'_>) -> Vec<HLSVideo> {
+    args.values_of("VIDEO_DATA")
+        .map(|values| values.map(|data| str_to_hls_video(data).unwrap()).collect())
         .unwrap()
 }
 
 async fn download_video(
-    video_list: Vec<Option<(Url, m3u8_rs::playlist::MediaPlaylist)>>,
+    video_list: Vec<Option<(HLSVideo, m3u8_rs::playlist::MediaPlaylist)>>,
     args: &clap::ArgMatches<'_>,
 ) -> oneshot::Receiver<()> {
     let out_dir = std::path::Path::new(args.value_of("out_dir").unwrap()).to_path_buf();
-    let out_names = args.values_of("out_name").unwrap().collect::<Vec<_>>();
     std::fs::create_dir_all(&out_dir).expect("Can't create an output directory.");
 
     let multi_pb = MultiProgress::new();
 
-    let times: Vec<_> = if let Some(time_it) = args.values_of("duration") {
-        time_it
-            .map(|time| {
-                let caps = TIME_PATTERN.captures(time).unwrap();
-                let times: Vec<usize> = caps
-                    .iter()
-                    .skip(1)
-                    .map(|m| m.and_then(|mat| mat.as_str().parse().ok()).unwrap_or(0))
-                    .collect();
-                (
-                    (times[0] * 3600 + times[1] * 60 + times[2]) as f32,
-                    (times[3] * 3600 + times[4] * 60 + times[5]) as f32,
-                )
-            })
-            .inspect(|(start_time, end_time)| {
-                if *end_time != 0.0 {
-                    assert!(
-                        start_time <= end_time,
-                        "Start time should be smaller than end time"
-                    );
-                }
-            })
-            .collect()
-    } else {
-        vec![]
-    };
-
-    for (idx, video) in video_list.into_iter().enumerate() {
-        let (start_time, end_time) = times.get(idx).copied().unwrap_or((0f32, 0f32));
-
-        match (video, out_names.get(idx)) {
-            (Some((url, playlist)), Some(name)) => {
+    for video in video_list.into_iter() {
+        match video {
+            Some((hls_video, playlist)) => {
+                let (start_time, end_time) = hls_video.range;
+                let name = &hls_video.name;
                 let cumul_time = UnsafeCell::new(0f32);
                 let mut total_bytes: Option<i32> = None;
                 let content_length_list: Vec<_> = playlist
@@ -234,7 +228,7 @@ async fn download_video(
                 pb.enable_steady_tick(1000);
                 let pb = multi_pb.add(pb);
 
-                pb.set_prefix(&name);
+                pb.set_prefix(name);
 
                 let mut out_path = out_dir.clone();
                 out_path.push(name.to_string() + ".mp4");
@@ -245,7 +239,11 @@ async fn download_video(
                         let pb = pb.clone();
                         let pb2 = pb.clone();
                         stream::iter(content_length_list)
-                            .then(|chunk| REQ_CLIENT.get(url.join(&chunk.uri).unwrap()).send())
+                            .then(|chunk| {
+                                REQ_CLIENT
+                                    .get(hls_video.url.join(&chunk.uri).unwrap())
+                                    .send()
+                            })
                             .map_err(|e| eprintln!("{}", anyhow!(e)))
                             .map_ok(|res| {
                                 pb2.inc_length(res.content_length().unwrap_or(0));
@@ -283,7 +281,7 @@ async fn download_video(
                     pb.finish();
                 });
             }
-            (_, _) => {
+            _ => {
                 eprintln!("Couldn't get video properly");
             }
         }
