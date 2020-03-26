@@ -6,6 +6,8 @@ use indicatif::*;
 use lazy_static::*;
 use m3u8_rs::{playlist::*, *};
 use std::cell::UnsafeCell;
+use std::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
+use std::collections::BinaryHeap;
 use url::*;
 
 lazy_static! {
@@ -159,6 +161,8 @@ fn get_hls_videos(args: &clap::ArgMatches<'_>) -> Vec<HLSVideo> {
         .unwrap()
 }
 
+struct NonCopyable<T>(T);
+
 async fn download_video(
     video_list: Vec<Option<(HLSVideo, m3u8_rs::playlist::MediaPlaylist)>>,
     args: &clap::ArgMatches<'_>,
@@ -214,6 +218,7 @@ async fn download_video(
                             total_bytes = None;
                         }
                     })
+                    .enumerate()
                     .collect();
 
                 let pb = ProgressBar::hidden();
@@ -239,41 +244,29 @@ async fn download_video(
                         let pb = pb.clone();
                         let pb2 = pb.clone();
                         stream::iter(content_length_list)
-                            .then(|chunk| {
-                                REQ_CLIENT
-                                    .get(hls_video.url.join(&chunk.uri).unwrap())
-                                    .send()
+                            .map(|(idx, chunk)| {
+                                let idx_move = NonCopyable(idx); // Copy 때문에 일어나는 referencing을 제거하기 위한 꼼수
+                                async {
+                                    let chunk = chunk;
+                                    let idx = idx_move;
+                                    let res = REQ_CLIENT
+                                        .get(hls_video.url.join(&chunk.uri).unwrap())
+                                        .send()
+                                        .map_err(|e| eprintln!("{}", anyhow!(e)))
+                                        .await?;
+
+                                    pb2.inc_length(res.content_length().unwrap_or(0));
+                                    let bytes = res
+                                        .bytes()
+                                        .map_err(|e| eprintln! {"{}", anyhow!(e)})
+                                        .await?;
+                                    pb.inc(bytes.len() as u64);
+                                    sender
+                                        .unbounded_send((idx.0, bytes))
+                                        .map_err(|e| eprintln!("{}", anyhow!(e)))
+                                }
                             })
-                            .map_err(|e| eprintln!("{}", anyhow!(e)))
-                            .map_ok(|res| {
-                                pb2.inc_length(res.content_length().unwrap_or(0));
-                                stream::unfold(Some(res), |res| async {
-                                    if let Some(mut res) = res {
-                                        match res.chunk().await {
-                                            Ok(Some(chunk)) => Some((Ok(chunk), Some(res))),
-                                            Ok(None) => None,
-                                            Err(e) => {
-                                                Some((Err(eprintln!("{}", anyhow!(e))), None))
-                                            }
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                })
-                            })
-                            .try_flatten()
-                            .map(move |bytes| {
-                                bytes
-                                    .and_then(|b| {
-                                        pb.inc(b.len() as u64);
-                                        sender
-                                            .unbounded_send(b)
-                                            .map_err(|e| eprintln!("{}", anyhow!(e)))
-                                    })
-                                    .ok();
-                                future::ready(())
-                            })
-                            .buffered(MAX_FUTURE_NUM)
+                            .buffer_unordered(MAX_FUTURE_NUM)
                             .for_each(|_| future::ready(()))
                             .await;
                     }
@@ -297,7 +290,24 @@ async fn download_video(
     receiver
 }
 
-async fn data_send(out_file: std::path::PathBuf) -> mpsc::UnboundedSender<Bytes> {
+#[derive(Eq, PartialEq)]
+struct IndexedByte {
+    idx: usize,
+    data: Bytes,
+}
+
+impl PartialOrd for IndexedByte {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for IndexedByte {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.idx.cmp(&other.idx).reverse()
+    }
+}
+
+async fn data_send(out_file: std::path::PathBuf) -> mpsc::UnboundedSender<(usize, Bytes)> {
     use gst::prelude::*;
     use gstreamer as gst;
     use gstreamer_app as gst_app;
@@ -321,12 +331,24 @@ async fn data_send(out_file: std::path::PathBuf) -> mpsc::UnboundedSender<Bytes>
 
         pipeline.set_state(gst::State::Playing).unwrap();
 
-        while let Some(b) = receiver.next().await {
-            loop {
-                if let Ok(_) = appsrc.push_buffer(gst::buffer::Buffer::from_slice(b)) {
-                    break;
-                } else {
-                    unreachable!();
+        let mut cur_idx = 0usize;
+        let mut heap = BinaryHeap::new();
+        while let Some((idx, b)) = receiver.next().await {
+            if idx == cur_idx {
+                appsrc
+                    .push_buffer(gst::buffer::Buffer::from_slice(b))
+                    .unwrap();
+                cur_idx += 1;
+            } else {
+                heap.push(IndexedByte { idx, data: b });
+                match heap.peek() {
+                    Some(val) if val.idx == cur_idx => {
+                        appsrc
+                            .push_buffer(gst::buffer::Buffer::from_slice(heap.pop().unwrap().data))
+                            .unwrap();
+                        cur_idx += 1;
+                    }
+                    _ => {}
                 }
             }
         }
