@@ -30,7 +30,7 @@ struct HLSVideo {
 async fn main() {
     let args = get_args(clap::App::new("Twitch Downloader"));
     let urls = get_hls_videos(&args);
-    let hls_list = get_hls_playlist(urls).await;
+    let hls_list = get_hls_playlist(urls, &args).await;
     gstreamer::init().unwrap();
     download_video(hls_list, &args).await.await.unwrap();
 }
@@ -63,27 +63,34 @@ async fn master_to_media(
     )
 }
 
-async fn get_hls_playlist(videos: Vec<HLSVideo>) -> Vec<Option<(HLSVideo, MediaPlaylist)>> {
+async fn get_hls_playlist(
+    videos: Vec<HLSVideo>,
+    args: &clap::ArgMatches<'_>,
+) -> Vec<Result<(HLSVideo, MediaPlaylist), reqwest::Error>> {
     stream::iter(videos)
         .map(|mut hls_video| async {
             let bytes = REQ_CLIENT
                 .get(hls_video.url.clone())
                 .send()
-                .map_err(|e| eprintln!("Error: {}", e))
-                .and_then(|res| res.bytes().map_err(|e| eprintln!("Error: {}", e)))
+                .and_then(|res| res.bytes())
                 .await;
-            if let Some(bytes) = bytes.ok() {
-                match parse_playlist_res(bytes.as_ref()).unwrap() {
+            match bytes {
+                Ok(bytes) => {
+                    let parsed_playlist = parse_playlist_res(bytes.as_ref()).unwrap();
+                    if args.is_present("print-debug") {
+                        let contents = std::str::from_utf8(bytes.as_ref()).unwrap();
+                        eprintln!("DEBUG: for url '{}'\n original playlist -> {}\n parsed playlist -> {:#?}", &hls_video.url, contents, &parsed_playlist);
+                    }
+                    match parsed_playlist {
                     Playlist::MasterPlaylist(master_list) => {
                         let (new_url, media_list) =
                             master_to_media(&hls_video.url, master_list).await;
                         hls_video.url = new_url;
-                        Some((hls_video, media_list))
+                        Ok((hls_video, media_list))
                     }
-                    Playlist::MediaPlaylist(media_list) => Some((hls_video, media_list)),
-                }
-            } else {
-                None
+                    Playlist::MediaPlaylist(media_list) => Ok((hls_video, media_list)),
+                }},
+                Err(e) => Err(e),
             }
         })
         .buffer_unordered(MAX_FUTURE_NUM)
@@ -113,6 +120,12 @@ fn get_args<'a>(app: clap::App<'a, '_>) -> clap::ArgMatches<'a> {
                 .empty_values(false)
                 .value_name("OUT_DIR")
                 .default_value("."),
+        )
+        .arg(
+            clap::Arg::with_name("print-debug")
+                .help("Print informations for debugging")
+                .long("debug")
+                .takes_value(false)
         )
         .get_matches()
 }
@@ -164,7 +177,7 @@ fn get_hls_videos(args: &clap::ArgMatches<'_>) -> Vec<HLSVideo> {
 struct NonCopyable<T>(T);
 
 async fn download_video(
-    video_list: Vec<Option<(HLSVideo, m3u8_rs::playlist::MediaPlaylist)>>,
+    video_list: Vec<Result<(HLSVideo, m3u8_rs::playlist::MediaPlaylist), reqwest::Error>>,
     args: &clap::ArgMatches<'_>,
 ) -> oneshot::Receiver<()> {
     let out_dir = std::path::Path::new(args.value_of("out_dir").unwrap()).to_path_buf();
@@ -174,7 +187,7 @@ async fn download_video(
 
     for video in video_list.into_iter() {
         match video {
-            Some((hls_video, playlist)) => {
+            Ok((hls_video, playlist)) => {
                 let (start_time, end_time) = hls_video.range;
                 let name = &hls_video.name;
                 let cumul_time = UnsafeCell::new(0f32);
@@ -274,8 +287,8 @@ async fn download_video(
                     pb.finish();
                 });
             }
-            _ => {
-                eprintln!("Couldn't get video properly");
+            Err(e) => {
+                eprintln!("Couldn't get video properly: {}", e);
             }
         }
     }
