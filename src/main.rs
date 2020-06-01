@@ -252,7 +252,8 @@ async fn download_video(
                 out_path.push(name.to_string() + ".mp4");
 
                 tokio::spawn(async move {
-                    let sender = data_send(out_path).await;
+                    let (comp_send, comp_recv) = oneshot::channel();
+                    let sender = data_send(out_path, comp_send).await;
                     {
                         let pb = pb.clone();
                         let pb2 = pb.clone();
@@ -284,6 +285,7 @@ async fn download_video(
                             .await;
                     }
                     pb.set_length(pb.position());
+                    comp_recv.await.ok();
                     pb.finish();
                 });
             }
@@ -320,7 +322,7 @@ impl Ord for IndexedByte {
     }
 }
 
-async fn data_send(out_file: std::path::PathBuf) -> mpsc::UnboundedSender<(usize, Bytes)> {
+async fn data_send(out_file: std::path::PathBuf, completion_sender: oneshot::Sender<()>) -> mpsc::UnboundedSender<(usize, Bytes)> {
     use gst::prelude::*;
     use gstreamer as gst;
     use gstreamer_app as gst_app;
@@ -384,6 +386,7 @@ async fn data_send(out_file: std::path::PathBuf) -> mpsc::UnboundedSender<(usize
         }
 
         pipeline.set_state(gst::State::Null).unwrap();
+        completion_sender.send(()).ok();
     });
 
     sender
