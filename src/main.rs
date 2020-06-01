@@ -253,8 +253,8 @@ async fn download_video(
 
                 tokio::spawn(async move {
                     let (comp_send, comp_recv) = oneshot::channel();
-                    let sender = data_send(out_path, comp_send).await;
                     {
+                        let sender = data_send(out_path, comp_send).await;
                         let pb = pb.clone();
                         let pb2 = pb.clone();
                         stream::iter(content_length_list)
@@ -366,6 +366,9 @@ async fn data_send(out_file: std::path::PathBuf, completion_sender: oneshot::Sen
                     _ => {}
                 }
             }
+        }
+        while !heap.is_empty() {
+            appsrc.push_buffer(gst::buffer::Buffer::from_slice(heap.pop().unwrap().data)).unwrap();
         }
         appsrc.end_of_stream().unwrap();
 
