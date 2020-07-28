@@ -249,7 +249,7 @@ async fn download_video(
                 pb.set_prefix(name);
 
                 let merge_pb = ProgressBar::hidden();
-                merge_pb.set_length(0);
+                merge_pb.set_length(content_length_list.len() as _);
                 merge_pb.set_style(
                     ProgressStyle::default_bar().template("{prefix:12}. {pos}/{len} chunks merged"),
                 );
@@ -361,7 +361,6 @@ async fn data_send(
         let mut cur_idx = 0usize;
         let mut heap = BinaryHeap::new();
         while let Some((idx, b)) = receiver.next().await {
-            pb.inc_length(1);
             if idx == cur_idx {
                 appsrc
                     .push_buffer(gst::buffer::Buffer::from_slice(b))
