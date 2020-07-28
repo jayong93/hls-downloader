@@ -248,15 +248,23 @@ async fn download_video(
 
                 pb.set_prefix(name);
 
+                let merge_pb = ProgressBar::hidden();
+                merge_pb.set_length(0);
+                merge_pb.set_style(
+                    ProgressStyle::default_bar().template("{prefix:12}. {pos}/{len} chunks merged"),
+                );
+                merge_pb.enable_steady_tick(1000);
+                let merge_pb = multi_pb.add(merge_pb);
+                merge_pb.set_prefix(name);
+
                 let mut out_path = out_dir.clone();
                 out_path.push(name.to_string() + ".mp4");
 
                 tokio::spawn(async move {
                     let (comp_send, comp_recv) = oneshot::channel();
                     {
-                        let sender = data_send(out_path, comp_send).await;
+                        let sender = data_send(out_path, comp_send, merge_pb).await;
                         let pb = pb.clone();
-                        let pb2 = pb.clone();
                         stream::iter(content_length_list)
                             .map(|(idx, chunk)| {
                                 let idx_move = NonCopyable(idx); // Copy 때문에 일어나는 referencing을 제거하기 위한 꼼수
@@ -269,7 +277,7 @@ async fn download_video(
                                         .map_err(|e| eprintln!("{}", anyhow!(e)))
                                         .await?;
 
-                                    pb2.inc_length(res.content_length().unwrap_or(0));
+                                    pb.inc_length(res.content_length().unwrap_or(0));
                                     let bytes = res
                                         .bytes()
                                         .map_err(|e| eprintln! {"{}", anyhow!(e)})
@@ -322,7 +330,11 @@ impl Ord for IndexedByte {
     }
 }
 
-async fn data_send(out_file: std::path::PathBuf, completion_sender: oneshot::Sender<()>) -> mpsc::UnboundedSender<(usize, Bytes)> {
+async fn data_send(
+    out_file: std::path::PathBuf,
+    completion_sender: oneshot::Sender<()>,
+    pb: ProgressBar,
+) -> mpsc::UnboundedSender<(usize, Bytes)> {
     use gst::prelude::*;
     use gstreamer as gst;
     use gstreamer_app as gst_app;
@@ -349,11 +361,13 @@ async fn data_send(out_file: std::path::PathBuf, completion_sender: oneshot::Sen
         let mut cur_idx = 0usize;
         let mut heap = BinaryHeap::new();
         while let Some((idx, b)) = receiver.next().await {
+            pb.inc_length(1);
             if idx == cur_idx {
                 appsrc
                     .push_buffer(gst::buffer::Buffer::from_slice(b))
                     .unwrap();
                 cur_idx += 1;
+                pb.inc(1);
             } else {
                 heap.push(IndexedByte { idx, data: b });
                 match heap.peek() {
@@ -362,15 +376,20 @@ async fn data_send(out_file: std::path::PathBuf, completion_sender: oneshot::Sen
                             .push_buffer(gst::buffer::Buffer::from_slice(heap.pop().unwrap().data))
                             .unwrap();
                         cur_idx += 1;
+                        pb.inc(1);
                     }
                     _ => {}
                 }
             }
         }
         while !heap.is_empty() {
-            appsrc.push_buffer(gst::buffer::Buffer::from_slice(heap.pop().unwrap().data)).unwrap();
+            appsrc
+                .push_buffer(gst::buffer::Buffer::from_slice(heap.pop().unwrap().data))
+                .unwrap();
+            pb.inc(1);
         }
         appsrc.end_of_stream().unwrap();
+        pb.finish();
 
         let bus = pipeline.get_bus().unwrap();
 
