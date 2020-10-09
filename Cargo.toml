@@ -6,16 +6,16 @@ edition = "2018"
 build = "build.rs"
 
 [dependencies]
-reqwest = {version="0.10.1", features=["json"]}
+reqwest = {version="0.10.*", features=["json"]}
 futures="0.3.1"
 clap = "*"
+regex = "*"
 serde = "*"
 serde_derive = "*"
 serde_json = "*"
-regex = "*"
 lazy_static = "*"
 percent-encoding = "*"
-tokio = {version="0.2.11", features=["rt-threaded", "macros"]}
+tokio = {version="0.2.*", features=["rt-threaded", "macros"]}
 num_cpus = "*"
 indicatif = ">= 0.11.0"
 itertools = "*"
