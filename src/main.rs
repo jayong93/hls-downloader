@@ -246,8 +246,6 @@ async fn download_video(
                 pb.enable_steady_tick(1000);
                 let pb = multi_pb.add(pb);
 
-                pb.set_prefix(name);
-
                 let merge_pb = ProgressBar::hidden();
                 merge_pb.set_length(content_length_list.len() as _);
                 merge_pb.set_style(
@@ -255,10 +253,51 @@ async fn download_video(
                 );
                 merge_pb.enable_steady_tick(1000);
                 let merge_pb = multi_pb.add(merge_pb);
-                merge_pb.set_prefix(name);
 
                 let mut out_path = out_dir.clone();
                 out_path.push(name.to_string() + ".mp4");
+
+                if let Some(files) = out_path
+                    .parent()
+                    .and_then(|out_dir| out_dir.read_dir().ok())
+                    .map(|dir_it| {
+                        dir_it
+                            .filter_map(|item| item.ok().map(|entry| entry.file_name()))
+                            .collect::<Vec<_>>()
+                    })
+                {
+                    let file_name = out_path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_owned();
+                    let file_ext = out_path
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_owned();
+                    let pattern = format!(r"{}(?:\((\d+)\))?\.{}", file_name, file_ext);
+                    let pattern = regex::Regex::new(&pattern).unwrap();
+                    let max_num: Option<u32> = files
+                        .iter()
+                        .filter_map(|entry| pattern.captures(entry.to_str().unwrap()))
+                        .inspect(|cap| eprintln!("{:?}", cap))
+                        .filter_map(|cap| {
+                            cap.get(1).map(|m| m.as_str()).unwrap_or("0").parse().ok()
+                        })
+                        .max();
+                    if let Some(max_num) = max_num {
+                        out_path.set_file_name(format!(
+                            "{}({}).{}",
+                            file_name,
+                            max_num + 1,
+                            file_ext
+                        ));
+                    }
+                }
+
+                pb.set_prefix(out_path.as_os_str().to_str().unwrap());
+                merge_pb.set_prefix(out_path.as_os_str().to_str().unwrap());
 
                 tokio::spawn(async move {
                     let (comp_send, comp_recv) = oneshot::channel();
@@ -331,7 +370,7 @@ impl Ord for IndexedByte {
 }
 
 async fn data_send(
-    mut out_file: std::path::PathBuf,
+    out_file: std::path::PathBuf,
     completion_sender: oneshot::Sender<()>,
     pb: ProgressBar,
 ) -> mpsc::UnboundedSender<(usize, Bytes)> {
@@ -340,34 +379,6 @@ async fn data_send(
     use gstreamer_app as gst_app;
 
     let (sender, mut receiver) = mpsc::unbounded();
-
-    if let Some(files) = out_file
-        .parent()
-        .and_then(|out_dir| out_dir.read_dir().ok())
-        .map(|dir_it| {
-            dir_it
-                .filter_map(|item| item.ok().map(|entry| entry.file_name()))
-                .collect::<Vec<_>>()
-        })
-    {
-        let file_name = out_file.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_owned();
-        let file_ext = out_file.extension().and_then(|s| s.to_str()).unwrap_or("").to_owned();
-        let pattern = format!(
-            r"{}\((\d+)\)?\.{}",
-            file_name,
-            file_ext
-        );
-        let pattern = regex::Regex::new(&pattern).unwrap();
-        let max_num: Option<u32> = files
-            .iter()
-            .filter_map(|entry| pattern.captures(entry.to_str().unwrap()))
-            .inspect(|cap| eprintln!("{:?}", cap))
-            .filter_map(|cap| cap.get(1).map(|m| m.as_str()).unwrap_or("0").parse().ok())
-            .max();
-        if let Some(max_num) = max_num {
-            out_file.set_file_name(format!("{}({}).{}", file_name, max_num + 1, file_ext));
-        }
-    }
 
     tokio::spawn(async move {
         let concat = gst::ElementFactory::make("concat", Some("c")).unwrap();
