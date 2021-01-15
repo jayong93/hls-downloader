@@ -117,6 +117,7 @@ fn get_args<'a>(app: clap::App<'a, '_>) -> clap::ArgMatches<'a> {
             clap::Arg::with_name("out_dir")
                 .help("Where temporary videos and full videos will be saved in.")
                 .long("out-dir")
+                .short("o")
                 .empty_values(false)
                 .value_name("OUT_DIR")
                 .default_value("."),
