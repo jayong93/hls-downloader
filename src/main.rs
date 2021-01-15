@@ -255,7 +255,7 @@ async fn download_video(
                 let merge_pb = multi_pb.add(merge_pb);
 
                 let mut out_path = out_dir.clone();
-                out_path.push(name.to_string() + ".mp4");
+                out_path.push(name.to_string() + ".ts");
 
                 if let Some(files) = out_path
                     .parent()
