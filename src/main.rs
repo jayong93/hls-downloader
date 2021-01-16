@@ -117,6 +117,7 @@ fn get_args<'a>(app: clap::App<'a, '_>) -> clap::ArgMatches<'a> {
             clap::Arg::with_name("out_dir")
                 .help("Where temporary videos and full videos will be saved in.")
                 .long("out-dir")
+                .short("o")
                 .empty_values(false)
                 .value_name("OUT_DIR")
                 .default_value("."),
@@ -255,7 +256,48 @@ async fn download_video(
                 let merge_pb = multi_pb.add(merge_pb);
 
                 let mut out_path = out_dir.clone();
-                out_path.push(name.to_string() + ".mp4");
+                out_path.push(name.to_string() + ".ts");
+
+                if let Some(files) = out_path
+                    .parent()
+                    .and_then(|out_dir| out_dir.read_dir().ok())
+                    .map(|dir_it| {
+                        dir_it
+                            .filter_map(|item| item.ok().map(|entry| entry.file_name()))
+                            .collect::<Vec<_>>()
+                    })
+                {
+                    let file_name = out_path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_owned();
+                    let file_ext = out_path
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_owned();
+                    let pattern = format!(r"{}(?:\((\d+)\))?\.{}", file_name, file_ext);
+                    let pattern = regex::Regex::new(&pattern).unwrap();
+                    let max_num: Option<u32> = files
+                        .iter()
+                        .filter_map(|entry| pattern.captures(entry.to_str().unwrap()))
+                        .filter_map(|cap| {
+                            cap.get(1).map(|m| m.as_str()).unwrap_or("0").parse().ok()
+                        })
+                        .max();
+                    if let Some(max_num) = max_num {
+                        out_path.set_file_name(format!(
+                            "{}({}).{}",
+                            file_name,
+                            max_num + 1,
+                            file_ext
+                        ));
+                    }
+                }
+
+                pb.set_prefix(out_path.as_os_str().to_str().unwrap());
+                merge_pb.set_prefix(out_path.as_os_str().to_str().unwrap());
 
                 if let Some(files) = out_path
                     .parent()
