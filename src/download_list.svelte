@@ -4,12 +4,6 @@
     export let disabled = false;
     export let list;
 
-    function select_file() {
-        invoke("get_save_file_name").then((path) => {
-            file_name = path;
-        });
-    }
-
     function remove(i) {
         list.splice(i, 1);
         list = list;

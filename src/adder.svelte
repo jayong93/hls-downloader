@@ -57,7 +57,10 @@
             readText().then((text) => (hls_url = text));
         }
     }
-    register("CmdOrControl+V", paste_url).catch((e) => alert(e));
+
+    unregister("CmdOrControl+V").finally(() => {
+        register("CmdOrControl+V", paste_url).catch((e) => alert(e));
+    });
 </script>
 
 <div class="input url">
