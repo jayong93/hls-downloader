@@ -1,6 +1,10 @@
 <script>
     import { invoke } from "@tauri-apps/api/tauri";
     import { createEventDispatcher } from "svelte";
+    import { readText } from "@tauri-apps/api/clipboard";
+    import { register, unregister } from "@tauri-apps/api/globalShortcut";
+
+    export let disabled = false;
 
     let hls_url;
     let file_name;
@@ -10,6 +14,8 @@
     let url_input;
     let range_start_input;
     let range_end_input;
+
+    let url_input_focused = false;
 
     $: is_valid =
         hls_url &&
@@ -45,6 +51,13 @@
             })
             .catch((err) => alert(err));
     }
+
+    function paste_url(_shortcut) {
+        if (url_input_focused) {
+            readText().then((text) => (hls_url = text));
+        }
+    }
+    register("CmdOrControl+V", paste_url).catch((e) => alert(e));
 </script>
 
 <div class="input url">
@@ -54,6 +67,8 @@
         name="url"
         placeholder="HLS URL"
         bind:this={url_input}
+        on:focus={() => (url_input_focused = true)}
+        on:blur={() => (url_input_focused = false)}
     />
 </div>
 <div class="input file">
@@ -91,7 +106,9 @@
     />
 </div>
 <div class="input">
-    <button disabled={is_valid ? false : true} on:click={add}>Add</button>
+    <button disabled={is_valid && !disabled ? false : true} on:click={add}
+        >Add</button
+    >
 </div>
 
 <style>
