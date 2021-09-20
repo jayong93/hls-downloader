@@ -3,26 +3,29 @@
     import { createEventDispatcher } from "svelte";
     import { readText } from "@tauri-apps/api/clipboard";
     import { register, unregister } from "@tauri-apps/api/globalShortcut";
+    import Button from "@smui/button";
+    import Textfield from "@smui/textfield";
+    import Card, { PrimaryAction } from "@smui/card";
 
     export let disabled = false;
 
-    let hls_url;
+    let hls_url = "";
     let file_name;
-    let range_start;
-    let range_end;
+    let range_start = "";
+    let range_end = "";
 
-    let url_input;
-    let range_start_input;
-    let range_end_input;
+    let url_invalid;
+    let range_start_invalid;
+    let range_end_invalid;
 
     let url_input_focused = false;
 
     $: is_valid =
         hls_url &&
-        url_input.checkValidity() &&
+        !url_invalid &&
         file_name &&
-        (!range_start || range_start_input.checkValidity()) &&
-        (!range_end || range_end_input.checkValidity());
+        !range_end_invalid &&
+        !range_start_invalid;
 
     function select_file() {
         invoke("get_save_file_name").then((path) => {
@@ -44,10 +47,10 @@
                     range_end,
                     file_name,
                 });
-                hls_url = undefined;
-                file_name = undefined;
-                range_start = undefined;
-                range_end = undefined;
+                hls_url = "";
+                file_name = "";
+                range_start = "";
+                range_end = "";
             })
             .catch((err) => alert(err));
     }
@@ -64,70 +67,59 @@
 </script>
 
 <div class="input url">
-    <input
+    <Textfield
+        style="width: 100%;"
+        required
         type="url"
+        variant="outlined"
         bind:value={hls_url}
-        name="url"
-        placeholder="HLS URL"
-        bind:this={url_input}
+        bind:invalid={url_invalid}
+        updateInvalid
+        label="HLS Url"
         on:focus={() => (url_input_focused = true)}
         on:blur={() => (url_input_focused = false)}
     />
 </div>
 <div class="input file">
-    <input
-        type="text"
-        bind:value={file_name}
-        name="file_name"
-        placeholder="File Name"
-        readonly
-        on:click={select_file}
-    />
+    <Card style="width: 100%;">
+        <PrimaryAction padded on:click={select_file}>
+            {file_name ? file_name : "Click To Save File"}
+        </PrimaryAction>
+    </Card>
 </div>
 <div class="input">
-    <input
+    <Textfield
         type="text"
+        variant="outlined"
         bind:value={range_start}
+        bind:invalid={range_start_invalid}
+        updateInvalid
         name="range_start"
-        pattern="\d+(:\d+){'{'}0,2{'}'}"
-        placeholder="Start Time"
-        title="aa"
-        size="9"
-        bind:this={range_start_input}
+        input$pattern="\d+(:\d+){'{'}0,2{'}'}"
+        label="Start Time"
     />
-</div>
-<div class="input">
-    <input
+    <Textfield
         type="text"
+        variant="outlined"
         bind:value={range_end}
+        bind:invalid={range_end_invalid}
+        updateInvalid
         name="range_end"
-        pattern="\d+(:\d+){'{'}0,2{'}'}"
-        placeholder="End Time"
-        title="aa"
-        size="9"
-        bind:this={range_end_input}
+        input$pattern="\d+(:\d+){'{'}0,2{'}'}"
+        label="End Time"
     />
 </div>
 <div class="input">
-    <button disabled={is_valid && !disabled ? false : true} on:click={add}
-        >Add</button
+    <Button
+        on:click={add}
+        disabled={is_valid && !disabled ? false : true}
+        variant="outlined">Add</Button
     >
 </div>
 
 <style>
     div.input {
-        display: inline-block;
-    }
-
-    div.url {
-        width: 30%;
-    }
-
-    input:invalid {
-        color: red;
-    }
-
-    input[type="url"] {
         width: 100%;
+        margin: 10px;
     }
 </style>

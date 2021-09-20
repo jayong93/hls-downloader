@@ -1,7 +1,14 @@
 <script>
-    import { invoke } from "@tauri-apps/api/tauri";
+    import List, {
+        Item,
+        Text,
+        PrimaryText,
+        SecondaryText,
+        Meta,
+    } from "@smui/list";
+    import Select, { Option } from "@smui/select";
+    import Button from "@smui/button";
 
-    export let disabled = false;
     export let list;
 
     function remove(i) {
@@ -11,32 +18,64 @@
 </script>
 
 <div class="list">
-    <ul>
-        {#each list as video, i}
-            <li>
-                <input type="text" value={video.hls_url} readonly {disabled}/>
-                <input type="text" value={video.file_name} readonly {disabled}/>
-                {#if video.range_start}
-                    <input type="text" value={"StartTime:" + video.range_start} size=15 readonly {disabled}/>
-                {/if}
-                {#if video.range_end}
-                    <input type="text" value={"EndTime:" + video.range_end} size=15 readonly {disabled}/>
-                {/if}
+    {#each list as video, i}
+        <div class="container">
+            <div class="texts">
+                <div class="name">
+                    {video.file_name}
+                </div>
+                <div class="url">
+                    {video.hls_url}
+                </div>
+            </div>
+            <div class="controls">
                 {#if video.bandwidths && video.bandwidths.length > 0}
-                    <select bind:value={video.selected_bandwidth} {disabled}>
+                    <Select
+                        bind:value={video.selected_bandwidth}
+                    >
                         {#each video.bandwidths as data}
-                            <option value={data}>{data.bandwidth}</option>
+                            <Option value={data}>{data.bandwidth}</Option>
                         {/each}
-                    </select>
+                    </Select>
                 {/if}
-                <button on:click={() => remove(i)} {disabled}>Remove</button>
-            </li>
-        {/each}
-    </ul>
+                <Button on:click={() => remove(i)} variant="outlined"
+                    >Remove</Button
+                >
+            </div>
+        </div>
+    {/each}
 </div>
 
 <style>
     div.list {
         width: 100%;
+        margin: 5px;
+    }
+
+    div.container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    div.texts {
+        display: inline-block;
+        width: 60%;
+        text-align: left;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    div.controls {
+        display: inline-block;
+        width: 40%;
+    }
+    div.url {
+        color: gray;
+        font-size: small;
+    }
+
+    div.name {
+        font-size: medium;
     }
 </style>
