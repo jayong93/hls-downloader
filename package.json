@@ -28,6 +28,7 @@
     "@smui/textfield": "^4.2.0",
     "@tauri-apps/api": "^1.0.0-beta.8",
     "sirv-cli": "^1.0.0",
-    "svelte-material-ui": "^4.2.0"
+    "svelte-material-ui": "^4.2.0",
+    "validator": "^13.6.0"
   }
 }

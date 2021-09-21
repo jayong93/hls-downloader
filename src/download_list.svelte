@@ -29,18 +29,23 @@
                 </div>
             </div>
             <div class="controls">
-                {#if video.bandwidths && video.bandwidths.length > 0}
-                    <Select
-                        bind:value={video.selected_bandwidth}
+                <div class="bandwidth">
+                    {#if video.bandwidths && video.bandwidths.length > 0}
+                        <Select bind:value={video.selected_bandwidth}>
+                            {#each video.bandwidths as data}
+                                <Option value={data}>{data.bandwidth}</Option>
+                            {/each}
+                            <svelte:fragment slot="helperText"
+                                >Bandwidth</svelte:fragment
+                            >
+                        </Select>
+                    {/if}
+                </div>
+                <div class="remove">
+                    <Button on:click={() => remove(i)} variant="outlined"
+                        >Remove</Button
                     >
-                        {#each video.bandwidths as data}
-                            <Option value={data}>{data.bandwidth}</Option>
-                        {/each}
-                    </Select>
-                {/if}
-                <Button on:click={() => remove(i)} variant="outlined"
-                    >Remove</Button
-                >
+                </div>
             </div>
         </div>
     {/each}
@@ -64,11 +69,15 @@
         text-align: left;
         overflow: hidden;
         text-overflow: ellipsis;
+        margin-right: 10px;
     }
 
     div.controls {
-        display: inline-block;
+        display: inline-grid;
+        grid-template-rows: 1fr;
+        grid-template-columns: 1fr 1fr;
         width: 40%;
+        align-items: center;
     }
     div.url {
         color: gray;
@@ -77,5 +86,16 @@
 
     div.name {
         font-size: medium;
+    }
+
+    div.remove {
+        align-items: center;
+        grid-row: 1/2;
+        grid-column: 2/3;
+    }
+
+    div.bandwidth {
+        align-items: center;
+        grid-column: 1/2;
     }
 </style>

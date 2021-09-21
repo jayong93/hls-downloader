@@ -6,6 +6,7 @@
     import Button from "@smui/button";
     import Textfield from "@smui/textfield";
     import Card, { PrimaryAction } from "@smui/card";
+    import isURL from 'validator/lib/isURL';
 
     export let disabled = false;
 
@@ -22,7 +23,7 @@
 
     $: is_valid =
         hls_url &&
-        !url_invalid &&
+        isURL(hls_url) &&
         file_name &&
         !range_end_invalid &&
         !range_start_invalid;
@@ -73,8 +74,7 @@
         type="url"
         variant="outlined"
         bind:value={hls_url}
-        bind:invalid={url_invalid}
-        updateInvalid
+        invalid={url_invalid}
         label="HLS Url"
         on:focus={() => (url_input_focused = true)}
         on:blur={() => (url_input_focused = false)}
