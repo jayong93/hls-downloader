@@ -25,7 +25,7 @@
             <div class="controls">
                 <div class="bandwidth">
                     {#if video.bandwidths && video.bandwidths.length > 0}
-                        <Select bind:value={video.selected_bandwidth}>
+                        <Select {disabled} bind:value={video.selected_bandwidth}>
                             {#each video.bandwidths as data}
                                 <Option value={data}>{data.bandwidth}</Option>
                             {/each}
