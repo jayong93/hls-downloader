@@ -1,17 +1,11 @@
-<script>
-    import List, {
-        Item,
-        Text,
-        PrimaryText,
-        SecondaryText,
-        Meta,
-    } from "@smui/list";
+<script lang="ts">
     import Select, { Option } from "@smui/select";
     import Button from "@smui/button";
+    import type {DownloadableVideo} from "./interface";
 
-    export let list;
+    export let list: DownloadableVideo[], disabled: boolean;
 
-    function remove(i) {
+    function remove(i: number) {
         list.splice(i, 1);
         list = list;
     }
@@ -42,7 +36,7 @@
                     {/if}
                 </div>
                 <div class="remove">
-                    <Button on:click={() => remove(i)} variant="outlined"
+                    <Button {disabled} on:click={() => remove(i)} variant="outlined"
                         >Remove</Button
                     >
                 </div>

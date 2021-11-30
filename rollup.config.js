@@ -1,6 +1,8 @@
+import autoPreprocess from 'svelte-preprocess';
+import typescript from '@rollup/plugin-typescript'
 import svelte from 'rollup-plugin-svelte';
 import commonjs from '@rollup/plugin-commonjs';
-import resolve from '@rollup/plugin-node-resolve';
+import resolve, { nodeResolve } from '@rollup/plugin-node-resolve';
 import livereload from 'rollup-plugin-livereload';
 import { terser } from 'rollup-plugin-terser';
 import css from 'rollup-plugin-css-only';
@@ -37,12 +39,17 @@ export default {
 		file: 'public/build/bundle.js'
 	},
 	plugins: [
+		nodeResolve(),
 		svelte({
 			compilerOptions: {
 				// enable run-time checks when not in production
 				dev: !production
-			}
+			},
+			preprocess: autoPreprocess()
 		}),
+
+		typescript({ sourceMap: !production }),
+
 		// we'll extract any component CSS out into
 		// a separate file - better for performance
 		css({ output: 'bundle.css' }),

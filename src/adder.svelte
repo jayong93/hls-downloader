@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
     import { invoke } from "@tauri-apps/api/tauri";
     import { createEventDispatcher } from "svelte";
     import { readText } from "@tauri-apps/api/clipboard";
@@ -37,7 +37,7 @@
     const dispatch = createEventDispatcher();
     function add() {
         invoke("add_video", { videoUrl: hls_url })
-            .then((bandwidths) => {
+            .then((bandwidths: number[]) => {
                 let result = bandwidths.map((v, i) => {
                     return { idx: i, bandwidth: v };
                 });

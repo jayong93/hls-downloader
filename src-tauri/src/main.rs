@@ -288,13 +288,19 @@ async fn add_video(video_url: String) -> Result<Vec<usize>, String> {
 }
 
 #[derive(Debug, Deserialize)]
+struct Bandwidth {
+  idx: usize,
+  bandwidth: usize,
+}
+
+#[derive(Debug, Deserialize)]
 struct HLSVideo {
-  #[serde(rename="hls_url")]
+  #[serde(rename = "hls_url")]
   url: String,
   file_name: String,
   range_start: Option<String>,
   range_end: Option<String>,
-  selected_bandwidth: Option<usize>,
+  selected_bandwidth: Option<Bandwidth>,
 }
 
 #[tauri::command]
@@ -311,8 +317,15 @@ async fn download(video_list: Vec<HLSVideo>) {
       match get_hls_playlist(&url).await {
         Ok(playlist) => match playlist {
           Playlist::MasterPlaylist(list) => {
-            let (new_url, media) =
-              master_to_media(&url, list, video.selected_bandwidth.unwrap()).await;
+            let (new_url, media) = master_to_media(
+              &url,
+              list,
+              video
+                .selected_bandwidth
+                .map(|Bandwidth { idx, bandwidth: _ }| idx)
+                .unwrap_or(0),
+            )
+            .await;
             download_video(
               new_url,
               video.file_name.clone().into(),
