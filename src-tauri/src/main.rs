@@ -123,6 +123,7 @@ fn parse_time_range(range_start: Option<&String>, range_end: Option<&String>) ->
 struct NonCopyable<T>(T);
 
 async fn download_video<'a>(
+  video_idx: usize,
   url: Url,
   mut out_path: PathBuf,
   range_start: Option<String>,
@@ -131,6 +132,7 @@ async fn download_video<'a>(
 ) {
   let (start_time, end_time) = parse_time_range(range_start.as_ref(), range_end.as_ref());
   let contents_list = get_contents_list(playlist, start_time, end_time);
+  let contents_len = contents_list.len();
 
   assert!(out_path.file_name().is_some());
   std::fs::create_dir_all(out_path.parent().unwrap()).unwrap();
@@ -154,7 +156,13 @@ async fn download_video<'a>(
             .await?;
 
           let bytes = res.bytes().map_err(|e| format!("{}", e)).await?;
-          sender.send((idx.0, bytes)).map_err(|e| format!("{}", e))
+          sender.send((idx.0, bytes)).map_err(|e| format!("{}", e))?;
+          unsafe {
+            let app_handle = APP_HANDLE.as_ref().unwrap();
+            app_handle
+              .emit_all("Progress", (video_idx, 1.0 / contents_len as f64))
+              .map_err(|e| format!("{}", e))
+          }
         }
       })
       .buffer_unordered(MAX_FUTURE_NUM)
@@ -306,10 +314,7 @@ struct HLSVideo {
 #[tauri::command]
 async fn download(video_list: Vec<HLSVideo>) {
   let app_handle = unsafe { APP_HANDLE.as_ref() }.unwrap();
-  for video in video_list {
-    app_handle
-      .emit_all("AddLog", format!("Downloading {}", video.file_name))
-      .ok();
+  for (i, video) in video_list.into_iter().enumerate() {
     if let Some(url) = url::Url::parse(&video.url.trim())
       .map_err(|e| app_handle.emit_all("AddLog", e.to_string()))
       .ok()
@@ -327,6 +332,7 @@ async fn download(video_list: Vec<HLSVideo>) {
             )
             .await;
             download_video(
+              i,
               new_url,
               video.file_name.clone().into(),
               video.range_start,
@@ -337,6 +343,7 @@ async fn download(video_list: Vec<HLSVideo>) {
           }
           Playlist::MediaPlaylist(media) => {
             download_video(
+              i,
               url,
               video.file_name.clone().into(),
               video.range_start,
@@ -351,9 +358,6 @@ async fn download(video_list: Vec<HLSVideo>) {
         }
       }
     }
-    app_handle
-      .emit_all("AddLog", format!("Downloaded {}", video.file_name))
-      .ok();
   }
 }
 

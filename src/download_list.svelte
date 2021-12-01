@@ -1,9 +1,17 @@
 <script lang="ts">
     import Select, { Option } from "@smui/select";
     import Button from "@smui/button";
-    import type {DownloadableVideo} from "./interface";
+    import CircularProgress from "@smui/circular-progress";
+    import type { DownloadableVideo } from "./interface";
+    import { listen, Event } from "@tauri-apps/api/event";
 
     export let list: DownloadableVideo[], disabled: boolean;
+
+    $: progresses = Array(list.length).fill(0);
+
+    listen("Progress", (event: Event<[number, number]>) => {
+        progresses[event.payload[0]] += event.payload[1];
+    });
 
     function remove(i: number) {
         list.splice(i, 1);
@@ -25,7 +33,10 @@
             <div class="controls">
                 <div class="bandwidth">
                     {#if video.bandwidths && video.bandwidths.length > 0}
-                        <Select {disabled} bind:value={video.selected_bandwidth}>
+                        <Select
+                            {disabled}
+                            bind:value={video.selected_bandwidth}
+                        >
                             {#each video.bandwidths as data}
                                 <Option value={data}>{data.bandwidth}</Option>
                             {/each}
@@ -36,9 +47,17 @@
                     {/if}
                 </div>
                 <div class="remove">
-                    <Button {disabled} on:click={() => remove(i)} variant="outlined"
-                        >Remove</Button
-                    >
+                    {#if disabled}
+                        <CircularProgress
+                            style="height: 48px; width: 48px"
+                            progress={progresses[i]}
+                        />
+                    {:else}
+                        <Button
+                            on:click={() => remove(i)}
+                            variant="outlined">Remove</Button
+                        >
+                    {/if}
                 </div>
             </div>
         </div>
