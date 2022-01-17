@@ -54,14 +54,15 @@ async fn master_to_media(
       }
     })
     .or(org_url.join(target_url))
+    .map(|mut u| {u.set_query(org_url.query()); u})
     .unwrap();
   (
     media_url.clone(),
     REQ_CLIENT
       .get(media_url)
       .send()
-      .map_err(|e| eprintln!("Error: {}", e))
-      .and_then(|res| res.bytes().map_err(|e| eprintln!("Error: {}", e)))
+      .map_err(|e| eprintln!("Error: {e}"))
+      .and_then(|res| res.bytes().map_err(|e| eprintln!("Error: {e}")))
       .map_ok(|b| m3u8_rs::parse_media_playlist(b.as_ref()).unwrap().1)
       .map(|res| res.unwrap())
       .await,
@@ -148,20 +149,25 @@ async fn download_video<'a>(
         let idx_move = NonCopyable(idx); // Copy 때문에 일어나는 referencing을 제거하기 위한 꼼수
         async {
           let chunk = chunk;
+          let chunk_url = {
+            let mut chunk_url = url.join(&chunk.uri).unwrap();
+            chunk_url.set_query(url.query());
+            chunk_url
+          };
           let idx = idx_move;
           let res = REQ_CLIENT
-            .get(url.join(&chunk.uri).unwrap())
+            .get(chunk_url)
             .send()
-            .map_err(|e| format!("{}", e))
+            .map_err(|e| e.to_string())
             .await?;
 
-          let bytes = res.bytes().map_err(|e| format!("{}", e)).await?;
-          sender.send((idx.0, bytes)).map_err(|e| format!("{}", e))?;
+          let bytes = res.bytes().map_err(|e| e.to_string()).await?;
+          sender.send((idx.0, bytes)).map_err(|e| e.to_string())?;
           unsafe {
             let app_handle = APP_HANDLE.as_ref().unwrap();
             app_handle
               .emit_all("Progress", (video_idx, 1.0 / contents_len as f64))
-              .map_err(|e| format!("{}", e))
+              .map_err(|e| e.to_string())
           }
         }
       })
@@ -250,7 +256,7 @@ async fn data_send(
     for msg in bus.iter_timed(gst::ClockTime::NONE) {
       match msg.view() {
         MessageView::Error(e) => {
-          println!("{:?}", e);
+          println!("{e:?}");
           break;
         }
         MessageView::Eos(_) => {
@@ -295,6 +301,7 @@ async fn add_video(video_url: String) -> Result<Vec<usize>, String> {
   }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct Bandwidth {
   idx: usize,
