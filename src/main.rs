@@ -6,15 +6,19 @@
 use std::{cmp::Ordering, collections::BinaryHeap, path::PathBuf};
 
 use bytes::Bytes;
+use clap::Parser;
 use futures::prelude::*;
+use gstreamer as gst;
+use indicatif::{self, ProgressBar, ProgressStyle};
 use lazy_static::lazy_static;
+use log::{debug, error};
 use m3u8_rs::{
   parse_playlist_res,
   playlist::{MediaSegment, Playlist},
 };
+use pretty_env_logger;
 use reqwest::{Client, Url};
 use serde::Deserialize;
-use tauri::{self, AppHandle, Manager, Wry};
 use tokio::sync::{mpsc, oneshot};
 
 lazy_static! {
@@ -22,29 +26,37 @@ lazy_static! {
   static ref TIME_PATTERN: regex::Regex =
     regex::Regex::new(r"^\s*(?:(?:(?:(\d+):)?(?:(\d+):))?(\d+))?\s*$").unwrap();
 }
-static mut APP_HANDLE: Option<AppHandle<Wry>> = None;
 const MAX_FUTURE_NUM: usize = 10;
 
-async fn get_hls_playlist(url: &Url) -> Result<Playlist, String> {
+async fn get_hls_playlist(url: &Url) -> Option<Playlist> {
   let bytes = REQ_CLIENT
     .get(url.clone())
     .send()
     .and_then(|res| res.bytes())
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| error!("couldn't get a HLS playlist from the url. url: {url:?}, error: {e:?}"))
+    .ok()?;
 
-  Ok(parse_playlist_res(bytes.as_ref()).map_err(|_| String::from("invalid hls playlist"))?)
+  parse_playlist_res(bytes.as_ref())
+    .map_err(|_| error!("invalid hls playlist: {url:?}"))
+    .ok()
 }
 
 async fn master_to_media(
   org_url: &Url,
   mut master_list: m3u8_rs::playlist::MasterPlaylist,
-  idx: usize,
-) -> (Url, m3u8_rs::playlist::MediaPlaylist) {
+) -> Option<(Url, m3u8_rs::playlist::MediaPlaylist)> {
   master_list
     .variants
     .sort_by_key(|v| v.bandwidth.parse::<usize>().unwrap());
-  let target_url = &master_list.variants[idx].uri;
+  let target_url = &master_list
+    .variants
+    .last()
+    .or_else(|| {
+      error!("master playlist doesn't have bandwidth variants: {master_list:?}");
+      None
+    })?
+    .uri;
   let media_url = Url::parse(target_url)
     .and_then(|u| {
       if !u.cannot_be_a_base() {
@@ -54,19 +66,31 @@ async fn master_to_media(
       }
     })
     .or(org_url.join(target_url))
-    .map(|mut u| {u.set_query(org_url.query()); u})
-    .unwrap();
-  (
+    .map(|mut u| {
+      u.set_query(org_url.query());
+      u
+    }) // append query params of the org_url to the target url
+    .map_err(|e| error!("failed to parse media playlist url. url: {target_url:?}, error: {e:?}"))
+    .ok()?;
+  Some((
     media_url.clone(),
     REQ_CLIENT
       .get(media_url)
       .send()
-      .map_err(|e| eprintln!("Error: {e}"))
-      .and_then(|res| res.bytes().map_err(|e| eprintln!("Error: {e}")))
-      .map_ok(|b| m3u8_rs::parse_media_playlist(b.as_ref()).unwrap().1)
-      .map(|res| res.unwrap())
-      .await,
-  )
+      .map_err(|e| error!("couldn't send a request. error: {e}"))
+      .and_then(|res| {
+        res
+          .bytes()
+          .map_err(|e| error!("couldn't get a response's body. error: {e}"))
+      })
+      .await
+      .and_then(|b| {
+        m3u8_rs::parse_media_playlist(b.as_ref())
+          .map(|res| res.1)
+          .map_err(|e| error!("couldn't parse HLS media playlist. error: {e:?}"))
+      })
+      .ok()?,
+  ))
 }
 
 fn get_contents_list(
@@ -104,34 +128,15 @@ fn get_contents_list(
   }
 }
 
-fn parse_time_range(range_start: Option<&String>, range_end: Option<&String>) -> (f32, f32) {
-  let mut ranges = [0.0f32, 0.0];
-  for (i, val) in IntoIterator::into_iter([range_start, range_end]).enumerate() {
-    if let Some(s) = val {
-      let caps = TIME_PATTERN.captures(s.trim()).unwrap();
-      let times: Vec<usize> = caps
-        .iter()
-        .skip(1)
-        .map(|m| m.and_then(|mat| mat.as_str().parse().ok()).unwrap_or(0))
-        .collect();
-      ranges[i] = (times[0] * 3600 + times[1] * 60 + times[2]) as f32;
-    }
-  }
-
-  (ranges[0], ranges[1])
-}
-
 struct NonCopyable<T>(T);
 
 async fn download_video<'a>(
-  video_idx: usize,
   url: Url,
   mut out_path: PathBuf,
-  range_start: Option<String>,
-  range_end: Option<String>,
+  start_time: f32,
+  end_time: f32,
   playlist: m3u8_rs::playlist::MediaPlaylist,
 ) {
-  let (start_time, end_time) = parse_time_range(range_start.as_ref(), range_end.as_ref());
   let contents_list = get_contents_list(playlist, start_time, end_time);
   let contents_len = contents_list.len();
 
@@ -140,6 +145,9 @@ async fn download_video<'a>(
   if let None = out_path.extension() {
     out_path.set_extension("ts");
   }
+
+  let pb = ProgressBar::new(contents_len as u64).with_message(out_path.to_string_lossy().into_owned());
+  pb.set_style(ProgressStyle::default_bar().template("[{msg}][{elapsed}] {wide_bar}"));
 
   let (comp_send, comp_recv) = oneshot::channel();
   {
@@ -156,19 +164,26 @@ async fn download_video<'a>(
           };
           let idx = idx_move;
           let res = REQ_CLIENT
-            .get(chunk_url)
+            .get(chunk_url.clone())
             .send()
-            .map_err(|e| e.to_string())
+            .map_err(|e| error!("couldn't send a request. url: {chunk_url:?}, error: {e:?}"))
             .await?;
 
-          let bytes = res.bytes().map_err(|e| e.to_string()).await?;
-          sender.send((idx.0, bytes)).map_err(|e| e.to_string())?;
-          unsafe {
-            let app_handle = APP_HANDLE.as_ref().unwrap();
-            app_handle
-              .emit_all("Progress", (video_idx, 1.0 / contents_len as f64))
-              .map_err(|e| e.to_string())
-          }
+          let res_str = format!("{res:?}");
+
+          let bytes = res
+            .bytes()
+            .map_err(|e| {
+              error!("couldn't get a body of a response. res: {res_str:?}, error: {e:?}")
+            })
+            .await?;
+          sender
+            .send((idx.0, bytes))
+            .map_err(|e| error!("file concat module has exited. error: {e:?}"))?;
+
+          pb.inc(1);
+
+          Result::<(), ()>::Ok(())
         }
       })
       .buffer_unordered(MAX_FUTURE_NUM)
@@ -176,6 +191,7 @@ async fn download_video<'a>(
       .await;
   }
   comp_recv.await.ok();
+  pb.finish();
 }
 
 #[derive(Eq, PartialEq)]
@@ -200,7 +216,6 @@ async fn data_send(
   completion_sender: oneshot::Sender<()>,
 ) -> mpsc::UnboundedSender<(usize, Bytes)> {
   use gst::prelude::*;
-  use gstreamer as gst;
   use gstreamer_app as gst_app;
 
   let (sender, mut receiver) = mpsc::unbounded_channel();
@@ -256,7 +271,7 @@ async fn data_send(
     for msg in bus.iter_timed(gst::ClockTime::NONE) {
       match msg.view() {
         MessageView::Error(e) => {
-          println!("{e:?}");
+          error!("{e:?}");
           break;
         }
         MessageView::Eos(_) => {
@@ -273,34 +288,6 @@ async fn data_send(
   sender
 }
 
-#[tauri::command]
-fn get_save_file_name() -> Result<String, ()> {
-  let dialog = rfd::FileDialog::new().add_filter("Video File", &["ts"]);
-  dialog
-    .save_file()
-    .ok_or(())
-    .map(|path| path.to_string_lossy().into())
-}
-
-#[tauri::command]
-async fn add_video(video_url: String) -> Result<Vec<usize>, String> {
-  let url = url::Url::parse(&video_url.trim()).map_err(|e| e.to_string())?;
-  let playlist = get_hls_playlist(&url).await?;
-
-  match playlist {
-    Playlist::MasterPlaylist(list) => {
-      let mut result: Vec<_> = list
-        .variants
-        .into_iter()
-        .map(|stream| stream.bandwidth.parse::<usize>().unwrap())
-        .collect();
-      result.sort();
-      Ok(result)
-    }
-    Playlist::MediaPlaylist(_) => Ok(vec![]),
-  }
-}
-
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct Bandwidth {
@@ -308,80 +295,58 @@ struct Bandwidth {
   bandwidth: usize,
 }
 
-#[derive(Debug, Deserialize)]
-struct HLSVideo {
-  #[serde(rename = "hls_url")]
+#[derive(Parser)]
+#[clap(author, version, about)]
+struct CliOption {
   url: String,
-  file_name: String,
-  range_start: Option<String>,
-  range_end: Option<String>,
-  selected_bandwidth: Option<Bandwidth>,
+  name: String,
+  #[clap(long, parse(try_from_str = parse_time_str), default_value_t = 0f32)]
+  start_at: f32,
+  #[clap(long, parse(try_from_str = parse_time_str), default_value_t = 0f32)]
+  end_at: f32,
 }
 
-#[tauri::command]
-async fn download(video_list: Vec<HLSVideo>) {
-  let app_handle = unsafe { APP_HANDLE.as_ref() }.unwrap();
-  for (i, video) in video_list.into_iter().enumerate() {
-    if let Some(url) = url::Url::parse(&video.url.trim())
-      .map_err(|e| app_handle.emit_all("AddLog", e.to_string()))
-      .ok()
-    {
-      match get_hls_playlist(&url).await {
-        Ok(playlist) => match playlist {
-          Playlist::MasterPlaylist(list) => {
-            let (new_url, media) = master_to_media(
-              &url,
-              list,
-              video
-                .selected_bandwidth
-                .map(|Bandwidth { idx, bandwidth: _ }| idx)
-                .unwrap_or(0),
-            )
-            .await;
-            download_video(
-              i,
-              new_url,
-              video.file_name.clone().into(),
-              video.range_start,
-              video.range_end,
-              media,
-            )
-            .await;
-          }
-          Playlist::MediaPlaylist(media) => {
-            download_video(
-              i,
-              url,
-              video.file_name.clone().into(),
-              video.range_start,
-              video.range_end,
-              media,
-            )
-            .await;
-          }
-        },
-        Err(err) => {
-          app_handle.emit_all("AddLog", err.to_string()).ok();
-        }
-      }
-    }
-  }
-}
-
-fn main() {
-  tauri::Builder::default()
-    .setup(|app| {
-      unsafe {
-        APP_HANDLE = Some(app.handle());
-      }
-      gstreamer::init().unwrap();
-      Ok(())
+fn parse_time_str(time: &str) -> Result<f32, String> {
+  time
+    .split(':')
+    .rev()
+    .enumerate()
+    .take(3)
+    .try_fold(0f32, |acc, (idx, s)| {
+      Ok(
+        acc
+          + s
+            .parse::<f32>()
+            .map_err(|e| format!("couldn't parse time string. error: {e:?}"))?
+            * 60f32.powi(idx as i32),
+      )
     })
-    .invoke_handler(tauri::generate_handler![
-      get_save_file_name,
-      add_video,
-      download
-    ])
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+}
+
+#[tokio::main]
+async fn main() -> Result<(), ()> {
+  gst::init().unwrap();
+  pretty_env_logger::init();
+  let cli_option = CliOption::parse();
+
+  let url: Url = cli_option
+    .url
+    .parse()
+    .map_err(|e| error!("wrong formatted url. url: {}, error: {e:?}", cli_option.url))?;
+  let playlist = get_hls_playlist(&url).await.unwrap();
+  let (url, playlist) = match playlist {
+    Playlist::MasterPlaylist(master) => master_to_media(&url, master).await.unwrap(),
+    Playlist::MediaPlaylist(media) => (url, media),
+  };
+  debug!("try to download with url: {url:?}");
+  download_video(
+    url,
+    cli_option.name.into(),
+    cli_option.start_at,
+    cli_option.end_at,
+    playlist,
+  )
+  .await;
+
+  Ok(())
 }
